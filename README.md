@@ -150,7 +150,7 @@ PIE:             No
 | 4 | Format string → %hn split write to large target |
 | 5 | Format string → GOT overwrite of exit() |
 | 6 | Heap overflow → overwrite adjacent function pointer |
-| 7 | - |
+| 7 | Heap overflow → hijack strcpy dest pointer → GOT overwrite |
 | 8 | - |
 | 9 | - |
 | bonus0 | - |
