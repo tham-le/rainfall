@@ -148,7 +148,7 @@ PIE:             No
 | 2 | Buffer overflow → shellcode on heap via strdup |
 | 3 | Format string → %n to write global |
 | 4 | Format string → %hn split write to large target |
-| 5 | - |
+| 5 | Format string → GOT overwrite of exit() |
 | 6 | - |
 | 7 | - |
 | 8 | - |

