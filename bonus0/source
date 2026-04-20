@@ -1,0 +1,34 @@
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+void p(char *dest, char *prompt)
+{
+	char buffer[4096];
+
+	puts(prompt);
+	read(0, buffer, 0x1000);
+	*strchr(buffer, '\n') = '\0';
+	strncpy(dest, buffer, 0x14);
+}
+
+void pp(char *out)
+{
+	char a[20];
+	char b[20];
+
+	p(a, " - ");
+	p(b, " - ");
+	strcpy(out, a);
+	out[strlen(out)] = ' ';
+	strcat(out, b);
+}
+
+int main(void)
+{
+	char buf[42];
+
+	pp(buf);
+	puts(buf);
+	return 0;
+}

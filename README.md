@@ -153,7 +153,7 @@ PIE:             No
 | 7 | Heap overflow → hijack strcpy dest pointer → GOT overwrite |
 | 8 | Heap layout abuse → auth+0x20 lands in service's data |
 | 9 | C++ vtable hijack via heap overflow + shellcode (NX off) |
-| bonus0 | - |
+| bonus0 | strncpy no-null bug, shellcode in p's buffer, ret hijack |
 | bonus1 | - |
 | bonus2 | - |
 | bonus3 | - |
