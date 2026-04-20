@@ -152,7 +152,7 @@ PIE:             No
 | 6 | Heap overflow → overwrite adjacent function pointer |
 | 7 | Heap overflow → hijack strcpy dest pointer → GOT overwrite |
 | 8 | Heap layout abuse → auth+0x20 lands in service's data |
-| 9 | - |
+| 9 | C++ vtable hijack via heap overflow + shellcode (NX off) |
 | bonus0 | - |
 | bonus1 | - |
 | bonus2 | - |
