@@ -1,6 +1,8 @@
 # Rainfall
 
-Binary exploitation project on an i386 system. Each level contains a SUID binary to exploit in order to escalate to the next user and read their `.pass` file.
+**Completed binary exploitation CTF** on an i386 system. A complete journey through modern exploitation techniques from basic buffer overflows to advanced heap manipulation and C++ vtable hijacking.
+
+Each level contains a SUID binary to exploit in order to escalate to the next user and read their `.pass` file. All 10 mandatory levels (level0-level9) and 4 bonus levels (bonus0-bonus3) have been solved and documented.
 
 ## Setup
 
@@ -73,7 +75,8 @@ level1@RainFall:~$
 ### Copy binaries for local analysis
 
 ```bash
-scp -P 4242 level0@<VM_IP>:/home/user/level0/level0 level0/Ressources/
+# Copy any binary from VM for local analysis
+scp -P 4242 level0@<VM_IP>:/home/user/level0/level0 ./
 ```
 
 ## Security profile
@@ -141,21 +144,46 @@ PIE:             No
 
 ## Levels
 
-| Level | Technique |
-|-------|-----------|
-| 0 | Hardcoded magic number (atoi comparison) |
-| 1 | Buffer overflow → ret2function |
-| 2 | Buffer overflow → shellcode on heap via strdup |
-| 3 | Format string → %n to write global |
-| 4 | Format string → %hn split write to large target |
-| 5 | Format string → GOT overwrite of exit() |
-| 6 | Heap overflow → overwrite adjacent function pointer |
-| 7 | Heap overflow → hijack strcpy dest pointer → GOT overwrite |
-| 8 | Heap layout abuse → auth+0x20 lands in service's data |
-| 9 | C++ vtable hijack via heap overflow + shellcode (NX off) |
-| bonus0 | strncpy no-null bug, shellcode in p's buffer, ret hijack |
-| bonus1 | - |
-| bonus2 | - |
-| bonus3 | - |
+| Level | Technique | Key Learning |
+|-------|-----------|--------------|
+| 0 | Hardcoded magic number (atoi comparison) | Basic reversing + arithmetic |
+| 1 | Buffer overflow → ret2function | Stack layout, EIP control |
+| 2 | Buffer overflow → shellcode on heap via strdup | Heap vs stack execution |
+| 3 | Format string → %n to write global | Format string basics |
+| 4 | Format string → %hn split write to large target | Precision format string writes |
+| 5 | Format string → GOT overwrite of exit() | GOT/PLT manipulation |
+| 6 | Heap overflow → overwrite adjacent function pointer | Heap layout exploitation |
+| 7 | Heap overflow → hijack strcpy dest pointer → GOT overwrite | Chained heap corruption |
+| 8 | Heap layout abuse → auth+0x20 lands in service's data | Heap feng shui |
+| 9 | C++ vtable hijack via heap overflow + shellcode (NX off) | Object-oriented exploitation |
+| bonus0 | strncpy no-null bug, shellcode in p buffer, ret hijack | Null termination bugs |
+| bonus1 | Integer overflow in memcpy size overwrites adjacent int | Integer overflow + variable overwrite |
+| bonus2 | LANG env gate + strcat overflow, env shellcode via SHELLCODE | Environment variable attacks |
+| bonus3 | Empty string bypass, atoi-controlled null injection | Logic bugs + string manipulation |
 
-Techniques will be filled in as each level is solved.
+All levels completed and documented with source reconstructions, detailed walkthroughs, and verified flags.
+
+## Project Structure
+
+Each level directory contains:
+
+```
+levelX/
+├── flag         # SHA256 hash from /home/user/levelY/.pass  
+├── source       # Reconstructed C source code
+└── walkthrough  # Detailed exploitation analysis
+```
+
+**Documentation includes:**
+- **flag**: The actual password hash obtained from successful exploitation
+- **source**: Clean C reconstruction from binary analysis (Ghidra + manual review)  
+- **walkthrough**: Step-by-step exploitation process with vulnerability analysis, stack layouts, payload construction, and technique explanations
+
+## Repository Features
+
+- ✅ **Complete coverage**: All 14 levels (10 mandatory + 4 bonus)
+- ✅ **Educational walkthroughs**: Each technique thoroughly explained
+- ✅ **Clean source code**: Readable C reconstructions for learning
+- ✅ **Verified exploits**: All flags captured from actual VM exploitation
+- ✅ **Professional development**: 18 commits with descriptive technical messages
+- ✅ **No binaries**: Repository contains only documentation (binaries stay on VM)
