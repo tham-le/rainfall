@@ -146,7 +146,7 @@ PIE:             No
 | 0 | Hardcoded magic number (atoi comparison) |
 | 1 | Buffer overflow → ret2function |
 | 2 | Buffer overflow → shellcode on heap via strdup |
-| 3 | - |
+| 3 | Format string → %n to write global |
 | 4 | - |
 | 5 | - |
 | 6 | - |

