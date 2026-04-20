@@ -1,0 +1,93 @@
+# Level 0
+
+Binary: 32-bit ELF, SUID level1, statically linked.
+
+## Analysis
+
+I opened it in GDB and disassembled main:
+
+```
+(gdb) disas main
+```
+
+Key instructions:
+
+```asm
+call   0x8049710 <atoi>           ; atoi(argv[1])
+cmp    $0x1a7,%eax                 ; compare to 0x1a7
+jne    0x8048f58 <main+152>        ; jump if not equal
+```
+
+0x1a7 in decimal:
+
+```
+(gdb) p/d 0x1a7
+$1 = 423
+```
+
+So main calls `atoi(argv[1])` and checks if it equals 423.
+
+### Success branch
+
+If the comparison passes:
+
+```asm
+call   <strdup>         ; arg = 0x80c5348
+call   <getegid>
+call   <geteuid>
+call   <setresgid>
+call   <setresuid>
+call   <execv>          ; arg = 0x80c5348
+```
+
+Checking the string at 0x80c5348:
+
+```
+(gdb) x/s 0x80c5348
+0x80c5348: "/bin/sh"
+```
+
+So it sets real/effective uid and gid to level1 (via setresuid/setresgid), then calls `execv("/bin/sh", ...)`. A shell as level1.
+
+### Fail branch
+
+At main+152:
+
+```asm
+call   <fwrite>         ; arg = 0x80c5350
+```
+
+```
+(gdb) x/s 0x80c5350
+0x80c5350: "No !\n"
+```
+
+Just prints "No !".
+
+## Exploit
+
+```
+$ ./level0 423
+$ cat /home/user/level1/.pass
+1fe8a524fa4bec01ca4ea2a869af2a02260d4a7d5fe7e7c24d8617e6dca12d3a
+```
+
+Flag: `1fe8a524fa4bec01ca4ea2a869af2a02260d4a7d5fe7e7c24d8617e6dca12d3a`
+
+## Notes
+
+The setresuid/setresgid calls matter because SUID only sets the effective uid to level1. The real uid stays level0. Some shells drop privileges when real and effective uid differ. setresuid forces all three (real, effective, saved) to level1, so the spawned shell keeps level1 privileges.
+
+This level is more of a reverse-engineering puzzle than an actual exploit: the backdoor is intentional, I just had to find the magic number.
+
+## Security profile
+
+| Protection | Status |
+|---|---|
+| ASLR | Off |
+| Stack canary | No |
+| NX | Enabled |
+| PIE | No |
+| RELRO | No |
+
+With ASLR off and no PIE, all addresses are predictable. NX blocks stack shellcode, but that's not needed here.
