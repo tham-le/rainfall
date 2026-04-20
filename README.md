@@ -151,7 +151,7 @@ PIE:             No
 | 5 | Format string → GOT overwrite of exit() |
 | 6 | Heap overflow → overwrite adjacent function pointer |
 | 7 | Heap overflow → hijack strcpy dest pointer → GOT overwrite |
-| 8 | - |
+| 8 | Heap layout abuse → auth+0x20 lands in service's data |
 | 9 | - |
 | bonus0 | - |
 | bonus1 | - |
