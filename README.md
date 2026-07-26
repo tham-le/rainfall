@@ -2,7 +2,7 @@
 
 **Completed binary exploitation CTF** on an i386 system. A complete journey through modern exploitation techniques from basic buffer overflows to advanced heap manipulation and C++ vtable hijacking.
 
-Each level contains a SUID binary to exploit in order to escalate to the next user and read their `.pass` file. All 10 mandatory levels (level0-level9) and 4 bonus levels (bonus0-bonus3) have been solved and documented.
+Each level contains a SUID binary to exploit in order to escalate to the next user and read their `.pass` file. All 10 mandatory levels (level0-level9) have been solved and documented.
 
 ## Setup
 
@@ -156,10 +156,6 @@ PIE:             No
 | 7 | Heap overflow → hijack strcpy dest pointer → GOT overwrite | Chained heap corruption |
 | 8 | Heap layout abuse → auth+0x20 lands in service's data | Heap feng shui |
 | 9 | C++ vtable hijack via heap overflow + shellcode (NX off) | Object-oriented exploitation |
-| bonus0 | strncpy no-null bug, shellcode in p buffer, ret hijack | Null termination bugs |
-| bonus1 | Integer overflow in memcpy size overwrites adjacent int | Integer overflow + variable overwrite |
-| bonus2 | LANG env gate + strcat overflow, env shellcode via SHELLCODE | Environment variable attacks |
-| bonus3 | Empty string bypass, atoi-controlled null injection | Logic bugs + string manipulation |
 
 All levels completed and documented with source reconstructions, detailed walkthroughs, and verified flags.
 
@@ -181,7 +177,7 @@ levelX/
 
 ## Repository Features
 
-- ✅ **Complete coverage**: All 14 levels (10 mandatory + 4 bonus)
+- ✅ **Complete coverage**: All 10 mandatory levels
 - ✅ **Educational walkthroughs**: Each technique thoroughly explained
 - ✅ **Clean source code**: Readable C reconstructions for learning
 - ✅ **Verified exploits**: All flags captured from actual VM exploitation
