@@ -33,6 +33,6 @@ SUID **bonus0**. C++ binary, NX off. Bug: `setAnnotation()` does `memcpy(annotat
    ```
    (Shellcode is null-byte free, it travels through `argv[1]` as a C string.)
 
-`Ressources/exploit.py` runs this over SSH against the real target.
+`Ressources/exploit.py` builds this payload with `struct.pack` (edit `a_addr` after running gdb, then `./level9 "$(python exploit.py)"`).
 
 Flag: `f3f0004b6f364cb5a4147e9ef827fa922a4861408845c26b6971ad770d906728`

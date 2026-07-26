@@ -11,6 +11,4 @@ SUID **end**. Final level. `buffer[atoi(argv[1])] = 0` drops a null byte at an a
    ```
    (Any other value fails: e.g. `"abc"` also gives `atoi()==0`, but then `strcmp("", "abc")` isn't equal.)
 
-`Ressources/exploit.py` runs this over SSH against the real target.
-
 Flag: `3321b6f81659f9a71c76616f606e4b50189cecfea611393d5d649f75e157353c`

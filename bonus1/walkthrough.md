@@ -20,6 +20,6 @@ SUID **bonus2**. Bug: `if (n < 10)` checks `n` signed, but `memcpy(buf, argv[2],
    ```
    (`"FLOW"` lands on `n`, making it equal `0x574f4c46`, the value `main` checks for before calling `execl`.)
 
-`Ressources/exploit.py` runs this over SSH against the real target.
+`Ressources/exploit.py` prints the ready `./bonus1 ...` command.
 
 Flag: `579bd19263eb8655e4cf7b742d75edf8c38226925d78db8163506f5191825245`
