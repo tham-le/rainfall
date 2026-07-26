@@ -170,14 +170,14 @@ Each level directory contains:
 ```
 levelX/
 ├── flag         # SHA256 hash from /home/user/levelY/.pass  
-├── source       # Reconstructed C source code
-└── walkthrough  # Detailed exploitation analysis
+├── source        # Reconstructed C source code
+└── walkthrough.md # Detailed exploitation analysis
 ```
 
 **Documentation includes:**
 - **flag**: The actual password hash obtained from successful exploitation
 - **source**: Clean C reconstruction from binary analysis (Ghidra + manual review)  
-- **walkthrough**: Step-by-step exploitation process with vulnerability analysis, stack layouts, payload construction, and technique explanations
+- **walkthrough.md**: Step-by-step exploitation process with vulnerability analysis, stack layouts, payload construction, and technique explanations
 
 ## Repository Features
 
