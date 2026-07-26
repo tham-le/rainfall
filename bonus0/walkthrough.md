@@ -88,12 +88,16 @@ We need `buffer`'s actual stack address. `p` calls `read(0, buffer, 0x1000)`, so
 0xbfffec24:     0xbfffec30
 ```
 
+`esp+8` is a **stack slot that holds a pointer**, the `buf` argument the caller pushed for `read`. To get the pointer's value you have to read what's stored at that address, which is exactly what `x` (examine memory) does: `0xbfffec24:` is the stack slot itself, `0xbfffec30` is the pointer sitting inside it. That second number is `buffer`'s address.
+
 Cross-check the same address the "long way", straight from the disassembly (`disas p` shows `lea -0x1008(%ebp),%eax` right before the call to `read`, i.e. `buffer = ebp - 0x1008`):
 
 ```
 (gdb) p/x $ebp-0x1008
 $1 = 0xbfffec30
 ```
+
+This time there is nothing to dereference: `ebp - 0x1008` is not a stack slot holding a pointer, it *is* the address, computed directly by the same subtraction the `lea` instruction does. So this uses `p/x` (print the value of an expression) instead of `x` (examine memory at an address). Using `x $ebp-0x1008` here would be a mistake: it would dereference one step too far and show you the first 4 bytes stored *inside* `buffer` (probably `0x00000000` if `read` hasn't run yet) instead of `buffer`'s address.
 
 Both methods agree: **`buffer = 0xbfffec30`** in this session. Aim into the sled, not at its start: `0xbfffec30 + 60 = 0xbfffec6c` → little-endian `\x6c\xec\xff\xbf`. If your own run lands on a different address, because of a different shell, a different length `cwd`, or anything else that changes the environment gdb hands to the process, just repeat these two commands and use the address you get. The offsets and shellcode do not change; only this one number does.
 
